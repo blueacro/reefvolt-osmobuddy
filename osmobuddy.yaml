@@ -80,7 +80,7 @@ display:
         it.printf(33, offset, id(bigfont), "FL");
       }
 
-      it.printf(80, offset, id(five), "T:%.0f", id(flow_total).state/1000.0);
+      it.printf(80, offset, id(five), "T:%.0f", id(flow_integ).state/1000.0);
       it.set_rotation(DISPLAY_ROTATION_270_DEGREES);
       it.printf(48, 115, id(five), "PSI");
       it.printf(48-24, 115, id(five), "PSI");
