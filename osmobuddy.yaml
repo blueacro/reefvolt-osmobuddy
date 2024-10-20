@@ -155,6 +155,12 @@ number:
     step: 1
 
 sensor:
+  - platform: integration
+    name: "Total Flow"
+    sensor: flow
+    id: flow_integ
+    time_unit: min
+    restore: True
   - platform: pulse_counter
     pin: GPIO7
     name: "Flow"
@@ -176,7 +182,7 @@ sensor:
     gain: 2.048
     name: "Pressure 1 - Tank"
     id: psi_a
-    update_interval: 1s
+    update_interval: 0.2s
     unit_of_measurement: PSI
     on_value:
       then:
@@ -210,7 +216,7 @@ sensor:
     gain: 2.048
     name: "Pressure 2 - Post-Filter"
     id: psi_b
-    update_interval: 1s
+    update_interval: 0.2s
     unit_of_measurement: PSI
     filters: 
       - exponential_moving_average: 
@@ -227,7 +233,7 @@ sensor:
     gain: 2.048
     name: "Pressure 3"
     id: psi_c
-    update_interval: 1s
+    update_interval: 0.2s
     unit_of_measurement: PSI
     filters: 
       - exponential_moving_average: 
