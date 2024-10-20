@@ -1,0 +1,297 @@
+esphome:
+  name: osmobuddy-test
+  friendly_name: osmobuddy-test
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Osmobuddy-Test Fallback Hotspot"
+    password: "testtest"
+
+captive_portal:
+    
+
+font:
+    - file: 'five.ttf'
+      id: five
+      size: 8
+    - file: "refsan.ttf"
+      id: refsan
+      size: 9
+    - file: "PixelGameFont.ttf"
+      id: bigfont
+      size: 20
+
+interval:
+  - interval: 0.5s
+    then:
+      - if:
+          condition:
+            switch.is_on: port_water_inlet
+          then:
+            - output.turn_on: led2
+          else:
+            - output.turn_off: led2
+
+status_led:
+  pin: 
+    number: GPIO2
+    inverted: true
+
+output:
+  - platform: gpio
+    id: led2
+    pin: GPIO3
+
+
+display:
+  - platform: ssd1306_i2c
+    model: "SH1106 128x64"
+    #address: 0x78
+    update_interval: 1s
+    lambda: |-
+      int offset = 0;
+      it.printf(0, 3+offset, id(five), "Tank");
+      it.printf(38, offset, id(bigfont), "%2.0f", fabs(id(psi_a).state));
+      offset += 24;
+      it.printf(0, 3+offset, id(five), "Filter");
+      it.printf(38, offset, id(bigfont), "%2.0f (%1.1f)", fabs(id(psi_b).state), fabs(id(psi_c).state - fabs(id(psi_b).state)));
+      offset += 24;
+      if (id(port_water_inlet).state == true) {
+        it.printf(3, offset, id(bigfont), "ON");
+      }
+      if (id(port_flush).state == true) {
+        it.printf(33, offset, id(bigfont), "FL");
+      }
+
+      it.printf(80, offset, id(five), "T:%.0f", id(flow_total).state/1000.0);
+      it.set_rotation(DISPLAY_ROTATION_270_DEGREES);
+      it.printf(48, 115, id(five), "PSI");
+      it.printf(48-24, 115, id(five), "PSI");
+      it.set_rotation(DISPLAY_ROTATION_0_DEGREES);
+
+script:
+  - id: stop_water_production
+    mode: single
+    then:
+      - script.stop: start_water_production
+      - switch.turn_on: port_flush
+      - delay: 30s
+      - switch.turn_off: port_flush # Turn off flush first to reduce flow to reduce water hammer
+      - delay: 1s
+      - switch.turn_off: port_water_inlet 
+      - delay: 10s
+      - switch.turn_on: port_flush # Drain pressure
+      - delay: 5s
+      - switch.turn_off: port_flush
+  - id: start_water_production
+    mode: single
+    then:
+      - script.stop: stop_water_production
+      - if:
+          condition:
+            - switch.is_on: force_turn_off
+          then:
+            - script.stop: start_water_production # Stop ourselves
+      - switch.turn_on: port_water_inlet
+      - if: 
+          condition:
+            - switch.is_off: port_flush
+          then:  
+            - switch.turn_on: port_flush
+      - delay: 30s
+      - switch.turn_off: port_flush
+          
+
+  
+i2c:
+  sda: GPIO5
+  scl: GPIO6
+  scan: true
+  id: bus_a
+  frequency: 400kHz
+
+ads1115:
+  - address: 0x48
+    id: ads1115_1
+pca9554:
+  - id: 'pca9554a_device'
+    address: 0x38
+
+number:
+  - platform: template
+    name: "Turn On Pressure"
+    id: turn_on_pressure
+    optimistic: true
+    restore_value: True
+    initial_value: 10
+    min_value: 0
+    max_value: 50
+    step: 1
+  - platform: template
+    name: "Turn Off Pressure"
+    id: turn_off_pressure
+    optimistic: true
+    restore_value: True
+    initial_value: 20
+    min_value: 0
+    max_value: 50
+    step: 1
+
+sensor:
+  - platform: pulse_counter
+    pin: GPIO7
+    name: "Flow"
+    update_interval: 5s
+    id: flow
+    total:
+      id: flow_total
+      unit_of_measurement: 'Pulses'
+      name: 'Total Flow'
+  - platform: uptime
+    name: Uptime Sensor
+  - platform: wifi_signal
+    name: "WiFi Signal Sensor"
+    update_interval: 60s
+    id: wifisignal
+  - platform: ads1115
+    ads1115_id: ads1115_1
+    multiplexer: 'A1_GND'
+    gain: 2.048
+    name: "Pressure 1 - Tank"
+    id: psi_a
+    update_interval: 1s
+    unit_of_measurement: PSI
+    on_value:
+      then:
+        - if:
+            condition:
+              and:
+                - switch.is_off: port_water_inlet
+                - lambda: return x < id(turn_on_pressure).state;
+            then:
+              - script.execute: start_water_production
+        - if:
+            condition:
+              and:
+                - switch.is_on: port_water_inlet
+                - lambda: return x > id(turn_off_pressure).state;
+            then:
+              - script.execute: stop_water_production
+              
+    filters:
+      - exponential_moving_average: 
+          send_every: 5
+      - lambda: |-
+          auto scaled = ((x-0.25)*44.444);
+          if (scaled < 0) {
+            return 0;
+          }
+          return scaled;
+  - platform: ads1115
+    ads1115_id: ads1115_1
+    multiplexer: 'A0_GND'
+    gain: 2.048
+    name: "Pressure 2 - Post-Filter"
+    id: psi_b
+    update_interval: 1s
+    unit_of_measurement: PSI
+    filters: 
+      - exponential_moving_average: 
+          send_every: 5 
+      - lambda: |-
+          auto scaled = ((x-0.25)*44.4444);
+          if (scaled < 0) {
+            return 0;
+          }
+          return scaled;
+  - platform: ads1115
+    ads1115_id: ads1115_1
+    multiplexer: 'A2_GND'
+    gain: 2.048
+    name: "Pressure 3"
+    id: psi_c
+    update_interval: 1s
+    unit_of_measurement: PSI
+    filters: 
+      - exponential_moving_average: 
+          send_every: 5
+      - lambda: |-
+          auto scaled = ((x-0.25)*44.444);
+          if (scaled < 0) {
+            return 0;
+          }
+          return scaled;
+
+switch:
+  - platform: template
+    restore_mode: RESTORE_DEFAULT_OFF
+    id: force_turn_off
+    name: "Force Off"
+    optimistic: True
+    turn_on_action: 
+      then:
+        - script.stop: stop_water_production
+        - script.stop: start_water_production
+        - switch.turn_off: port_water_inlet
+  - platform: gpio
+    id: port_a
+    name: "A"
+    pin:
+      pca9554: pca9554a_device
+      number: 0
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    id: port_flush
+    name: "Flush"
+    pin:
+      pca9554: pca9554a_device
+      number: 1
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    id: port_water_inlet
+    name: "Water Intlet"
+    pin:
+      pca9554: pca9554a_device
+      number: 2
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    id: port_d
+    name: "D"
+    pin:
+      pca9554: pca9554a_device
+      number: 3
+      mode:
+        output: true
+      inverted: false
+  - platform: gpio
+    id: port_relay
+    name: "Relay"
+    pin:
+      pca9554: pca9554a_device
+      number: 7
+      mode:
+        output: true
+      inverted: false
