@@ -156,7 +156,7 @@ number:
 
 sensor:
   - platform: integration
-    name: "Total Flow"
+    name: "Total Flow Integ"
     sensor: flow
     id: flow_integ
     time_unit: min
