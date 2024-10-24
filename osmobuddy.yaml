@@ -103,11 +103,10 @@ script:
             - switch.turn_off: port_salt_fill
       - if:
           condition:
-            - binary_sensor.is_on: float_low # If the switch is closed, send the signal to the Apex
+            - binary_sensor.is_on: float_low # If the switch is closed, send the signal to the Apex and latch
           then:
             - switch.turn_on: port_relay
-          else:
-            - switch.turn_off: port_relay
+  
   - id: stop_water_production
     mode: single
     then:
@@ -358,6 +357,7 @@ switch:
   - platform: gpio
     id: port_relay
     name: "Relay"
+    restore_mode: RESTORE_DEFAULT_OFF
     pin:
       pca9554: pca9554a_device
       number: 7
