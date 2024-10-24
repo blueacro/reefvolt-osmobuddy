@@ -39,6 +39,9 @@ font:
       size: 20
 
 interval:
+  - interval: 5s
+    then:
+      - script.execute: update_salt_fill
   - interval: 0.5s
     then:
       - if:
@@ -79,6 +82,9 @@ display:
       if (id(port_flush).state == true) {
         it.printf(33, offset, id(bigfont), "FL");
       }
+      if (id(port_salt_fill).state == true) {
+        it.print(63, offset, id(bigfont), "SF");
+      }
 
       it.printf(80, offset, id(five), "T:%.0f", id(flow_integ).state/1000.0);
       it.set_rotation(DISPLAY_ROTATION_270_DEGREES);
@@ -87,6 +93,21 @@ display:
       it.set_rotation(DISPLAY_ROTATION_0_DEGREES);
 
 script:
+  - id: update_salt_fill
+    mode: restart
+    then:
+      - if:
+          condition:
+            - binary_sensor.is_off: float_high # If the switch opens due to high water, make sure to turn off the fill valve
+          then:
+            - switch.turn_off: port_salt_fill
+      - if:
+          condition:
+            - binary_sensor.is_on: float_low # If the switch is closed, send the signal to the Apex
+          then:
+            - switch.turn_on: port_relay
+          else:
+            - switch.turn_off: port_relay
   - id: stop_water_production
     mode: single
     then:
@@ -154,12 +175,54 @@ number:
     max_value: 50
     step: 1
 
+binary_sensor:
+  - platform: gpio
+    id: float_low
+    name: "Float Low"
+    publish_initial_state: true
+    filters:
+      - delayed_on_off: 5s
+    pin:
+      pca9554: pca9554a_device
+      number: 4
+      mode:
+        input: true
+      inverted: true
+  - platform: gpio
+    id: float_high
+    name: "Float High"
+    publish_initial_state: true
+    pin:
+      pca9554: pca9554a_device
+      number: 5
+      mode:
+        input: true
+      inverted: true
+    filters:
+      - delayed_on_off: 5s
+    on_state:
+      - script.execute: update_salt_fill
+
+  - platform: gpio
+    id: float_c
+    name: "Float C"
+    publish_initial_state: true
+    pin:
+      pca9554: pca9554a_device
+      number: 6
+      mode:
+        input: true
+      inverted: true
+    filters:
+      - delayed_on_off: 5s
+    
+
 sensor:
   - platform: integration
     name: "Total Flow Integ"
     sensor: flow
-    id: flow_integ
     time_unit: min
+    id: flow_integ
     restore: True
   - platform: pulse_counter
     pin: GPIO7
@@ -258,7 +321,7 @@ switch:
         - switch.turn_off: port_water_inlet
   - platform: gpio
     id: port_a
-    name: "A"
+    name: "Pump"
     pin:
       pca9554: pca9554a_device
       number: 0
@@ -284,8 +347,8 @@ switch:
         output: true
       inverted: false
   - platform: gpio
-    id: port_d
-    name: "D"
+    id: port_salt_fill
+    name: "Salt Fill"
     pin:
       pca9554: pca9554a_device
       number: 3
