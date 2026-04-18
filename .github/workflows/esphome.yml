@@ -19,4 +19,4 @@ jobs:
     - name: ESPHome Builder
       uses: esphome/build-action@v7.2.0
       with:
-        yaml_file: osmobuddy.yaml
+        yaml-file: osmobuddy.yaml

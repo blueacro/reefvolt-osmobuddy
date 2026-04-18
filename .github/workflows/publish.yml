@@ -30,7 +30,7 @@ jobs:
       matrix:
         file: ${{ fromJson(needs.prepare.outputs.files) }}
     outputs:
-      esphome-version: ${{ steps.esphome-build.outputs.esphome-version }}
+      esphome-version: ${{ steps.esphome-build.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - run: |
@@ -39,7 +39,7 @@ jobs:
       - uses: esphome/build-action@v7.2.0
         id: esphome-build
         with:
-          yaml_file: ${{ matrix.file }}
+          yaml-file: ${{ matrix.file }}
       - run: |
           mkdir output
           mv "${{ steps.esphome-build.outputs.name }}" output/
