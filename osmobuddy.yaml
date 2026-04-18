@@ -1,6 +1,9 @@
 esphome:
   name: osmobuddy-test
   friendly_name: osmobuddy-test
+  project:
+    name: reefvolt.osmobuddy
+    version: "GIT_VERSION_FIELD"
 
 esp32:
   board: esp32-c3-devkitm-1

@@ -1,0 +1,5 @@
+.DS_Store
+/.esphome/
+/.venv/
+/output/
+/.claude/
