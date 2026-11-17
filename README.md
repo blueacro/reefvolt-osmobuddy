@@ -90,6 +90,50 @@ The firmware is a single ESPHome configuration (`osmobuddy.yaml`). To flash:
 
 Once connected, OsmoBuddy appears in Home Assistant via the ESPHome integration and exposes all sensors, switches, and the `Turn On Pressure` / `Turn Off Pressure` / `Force Off` controls.
 
+### Screen saver
+
+OLEDs burn in, and a screen that shows the same pressures for two years does. The display therefore stays dark when idle and wakes for 60 seconds when the knob is turned or pressed, or when the pump, inlet, flush or salt-fill output switches. The first touch on a dark screen only wakes it.
+
+### Salt mix menu
+
+The rotary encoder (A = IO4, B = IO10) and its push switch (IO9) drive a small menu for a saltwater mixing station: **Start mix**, **Stop mix** and **Salt mix OK**. Turning or pressing the knob opens it; **holding the knob for 1.5 s** sends the selected item; a short click closes it; it closes on its own after 15 s. A press that opens the menu never sends anything.
+
+IO9 is the ESP32-C3's BOOT pin: holding the knob down while the board powers up starts the bootloader instead of the firmware.
+
+OsmoBuddy only *asks*; Home Assistant decides. Each choice arrives as an event on the `Salt mix control` event entity, with `event_type` set to `start_mix`, `stop_mix` or `salt_ok`. An automation maps these to whatever runs your mix:
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: event.osmobuddy_test_salt_mix_control   # device name in osmobuddy.yaml
+conditions:
+  # ignore the state the entity restores when the device reconnects
+  - condition: template
+    value_template: >
+      {{ trigger.to_state.state not in ['unknown', 'unavailable']
+         and trigger.from_state.state != 'unavailable' }}
+actions:
+  - choose:
+      - conditions: "{{ trigger.to_state.attributes.event_type == 'start_mix' }}"
+        sequence: [{ action: script.salt_mix_start }]
+      - conditions: "{{ trigger.to_state.attributes.event_type == 'stop_mix' }}"
+        sequence: [{ action: script.salt_mix_stop }]
+      - conditions: "{{ trigger.to_state.attributes.event_type == 'salt_ok' }}"
+        sequence: [{ action: script.salt_mix_confirm }]
+```
+
+The display and the status light read two Home Assistant sensors, named by the `salt_stage_entity` and `salt_minutes_entity` substitutions at the top of `osmobuddy.yaml`:
+
+| Sensor | Value | What OsmoBuddy does |
+|--------|-------|---------------------|
+| stage (`sensor.salt_mix_stage`) | `mixing` | shows `MIX 123m` |
+| | `test` — mix finished, water changes held until someone tests salinity | large blinking **TEST SALT** prompt, even on the dark screen; the status light blinks at 1 Hz; the menu opens on **Salt mix OK** |
+| | `refill` — mixing barrel low | shows `REFILL`; the status light flashes every 2 s |
+| | `ready` | nothing |
+| minutes (`sensor.salt_mix_minutes_left`) | minutes left in the mix | used in `MIX 123m` |
+
+Both are ordinary template sensors in Home Assistant. If they don't exist the menu still sends its events and the status line stays blank.
+
 ## Manufacturing
 
 The `gerber/`, `bom/`, and `pnp/` directories contain what's needed to order assembled boards from JLCPCB, PCBWay, or similar. The enclosure in `3d/` is designed for FDM 3D printing.

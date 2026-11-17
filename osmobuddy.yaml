@@ -1,3 +1,10 @@
+substitutions:
+  # Home Assistant entities the salt mix menu reads (see README, "Salt mix
+  # menu"). Point them at your own; if they don't exist the menu still sends
+  # its events and the status line stays blank.
+  salt_stage_entity: sensor.salt_mix_stage
+  salt_minutes_entity: sensor.salt_mix_minutes_left
+
 esphome:
   name: osmobuddy-test
   friendly_name: osmobuddy-test
@@ -18,6 +25,10 @@ api:
 
 ota:
   - platform: esphome
+# Boots into an OTA-only mode after repeated failed boots, so a bad
+# update can be replaced over Wi-Fi without a USB cable.
+safe_mode:
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
@@ -28,7 +39,60 @@ wifi:
     password: "testtest"
 
 captive_portal:
-    
+
+# Salt mix menu on the knob (encoder SW400: A=IO4, B=IO10, push=IO9).
+# Turning or pressing opens the menu; holding the knob 1.5 s on an item sends
+# it to Home Assistant as an event; a short click closes it. A press that opens
+# the menu never acts.
+# A Home Assistant automation decides what to do with it (see README).
+globals:
+  - id: menu_open
+    type: bool
+    initial_value: 'false'
+  - id: menu_index
+    type: int
+    initial_value: '0'
+  - id: menu_last_ms        # last knob activity; the menu closes after 15 s
+    type: uint32_t
+    initial_value: '0'
+  - id: press_ms            # when the current press began, 0 = not pressed
+    type: uint32_t
+    initial_value: '0'
+  - id: press_armed         # the menu was already open when this press began
+    type: bool
+    initial_value: 'false'
+  - id: msg_text
+    type: std::string
+    initial_value: '""'
+  - id: msg_until
+    type: uint32_t
+    initial_value: '0'
+  # Screen saver: the OLED burned in after two years of the same picture, so
+  # the screen is dark unless something happened in the last 60 s.
+  - id: wake_until          # screen on until this time (60 s after boot)
+    type: uint32_t
+    initial_value: '60000'
+  - id: press_wake          # this press only woke the screen
+    type: bool
+    initial_value: 'false'
+  - id: saver_x
+    type: int
+    initial_value: '0'
+  - id: saver_y
+    type: int
+    initial_value: '0'
+  - id: saver_next
+    type: uint32_t
+    initial_value: '0'
+
+event:
+  - platform: template
+    id: salt_control
+    name: "Salt mix control"
+    event_types:
+      - start_mix
+      - stop_mix
+      - salt_ok
 
 font:
     - file: 'five.ttf'
@@ -45,20 +109,50 @@ interval:
   - interval: 5s
     then:
       - script.execute: update_salt_fill
+  - interval: 100ms
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+          if (id(press_ms) != 0 && id(press_armed) && now - id(press_ms) >= 1500) {
+            id(press_ms) = 0;
+            id(fire_selected).execute();
+          }
+          if (id(menu_open) && id(press_ms) == 0 && now - id(menu_last_ms) > 15000) {
+            id(menu_open) = false;
+          }
+          if (id(menu_open) || now < id(msg_until) + 200) {
+            id(oled).update();
+          }
   - interval: 0.5s
     then:
-      - if:
-          condition:
-            switch.is_on: port_water_inlet
-          then:
-            - output.turn_on: led2
-          else:
-            - output.turn_off: led2
+      - lambda: |-
+          // LED1: on while the inlet runs.
+          if (id(port_water_inlet).state) id(led2).turn_on();
+          else id(led2).turn_off();
+          // Status light: hold indicator (see light: status_light).
+          static uint8_t tick = 0;
+          tick++;
+          const std::string &st = id(ha_stage).state;
+          bool on = false;
+          if (st == "test") on = tick % 2;
+          else if (st == "refill") on = (tick % 4) == 0;
+          if (on != id(status_light).current_values.is_on()) {
+            auto call = on ? id(status_light).turn_on() : id(status_light).turn_off();
+            call.perform();
+          }
 
-status_led:
-  pin: 
-    number: GPIO2
-    inverted: true
+
+# Status light (IO2): still shows ESPHome errors/warnings, and blinks while water
+# changes are held: 1 Hz waiting for the salt test / Salt mix OK, a short flash
+# every 2 s while the mixing barrel needs a refill.
+light:
+  - platform: status_led
+    id: status_light
+    internal: true
+    restore_mode: ALWAYS_OFF     # never written to flash
+    pin:
+      number: GPIO2
+      inverted: true
 
 output:
   - platform: gpio
@@ -68,10 +162,73 @@ output:
 
 display:
   - platform: ssd1306_i2c
+    id: oled
     model: "SH1106 128x64"
     #address: 0x78
     update_interval: 1s
     lambda: |-
+      uint32_t now = millis();
+      const std::string &stage = id(ha_stage).state;
+      bool mixing = stage == "mixing";
+      bool test = stage == "test";       // mix done, water changes held until Salt mix OK
+      bool refill = stage == "refill";   // mixing barrel float low
+      if (now >= id(wake_until) && !id(menu_open) && now >= id(msg_until)) {
+        // Asleep: dark, apart from a small MIX/HOLD note that moves every 30 s.
+        if (test) {
+          // Mix finished: prompt hard. Big blinking text that moves every 10 s.
+          if (now >= id(saver_next)) {
+            id(saver_x) = random_uint32() % 50;
+            id(saver_y) = random_uint32() % 14;
+            id(saver_next) = now + 10000;
+          }
+          if ((now / 1000) % 2 == 0) {
+            it.print(id(saver_x), id(saver_y), id(bigfont), "TEST");
+            it.print(id(saver_x), id(saver_y) + 20, id(bigfont), "SALT");
+            it.print(0, id(saver_y) + 42, id(five), "then knob: Salt mix OK");
+          }
+          return;
+        }
+        if (!mixing && !refill) return;
+        if (now >= id(saver_next)) {
+          id(saver_x) = random_uint32() % 80;
+          id(saver_y) = random_uint32() % 56;
+          id(saver_next) = now + 30000;
+        }
+        if (mixing) it.printf(id(saver_x), id(saver_y), id(five), "MIX %.0fm", id(ha_mix_left).state);
+        else it.print(id(saver_x), id(saver_y), id(five), "REFILL");
+        return;
+      }
+      if (now < id(msg_until)) {
+        it.print(64, 32, id(refsan), TextAlign::CENTER, id(msg_text).c_str());
+        return;
+      }
+      if (id(menu_open)) {
+        it.print(0, 0, id(five), "SALT MIX");
+        if (mixing) it.printf(127, 0, id(five), TextAlign::TOP_RIGHT, "MIX %.0fm", id(ha_mix_left).state);
+        else if (test) it.print(127, 0, id(five), TextAlign::TOP_RIGHT, "TEST SALT");
+        else if (refill) it.print(127, 0, id(five), TextAlign::TOP_RIGHT, "REFILL");
+        else it.print(127, 0, id(five), TextAlign::TOP_RIGHT, "ready");
+        static const char *items[] = {"Start mix", "Stop mix", "Salt mix OK"};
+        for (int i = 0; i < 3; i++) {
+          int y = 12 + i * 14;
+          if (i == id(menu_index)) {
+            it.filled_rectangle(0, y - 1, 128, 13);
+            it.print(4, y, id(refsan), COLOR_OFF, items[i]);
+          } else {
+            it.print(4, y, id(refsan), items[i]);
+          }
+        }
+        if (id(press_ms) != 0 && id(press_armed)) {
+          int w = std::min<int>(128, (now - id(press_ms)) * 128 / 1500);
+          it.filled_rectangle(0, 56, w, 8);
+        } else {
+          it.print(0, 56, id(five), "hold: send  click: close");
+        }
+        return;
+      }
+      if (mixing) it.printf(80, 56, id(five), "MIX %.0fm", id(ha_mix_left).state);
+      else if (test) it.print(80, 56, id(five), "TEST SALT");
+      else if (refill) it.print(80, 56, id(five), "REFILL");
       int offset = 0;
       it.printf(0, 3+offset, id(five), "Tank");
       it.printf(38, offset, id(bigfont), "%2.0f", fabs(id(psi_a).state));
@@ -96,6 +253,48 @@ display:
       it.set_rotation(DISPLAY_ROTATION_0_DEGREES);
 
 script:
+  - id: wake_screen
+    then:
+      - lambda: |-
+          // Only set the timer: this runs when the switches publish their state
+          // during setup, before the display has a frame buffer, and drawing
+          // then crashes the chip. The display's 1 s refresh picks it up.
+          id(wake_until) = millis() + 60000;
+  - id: menu_turn
+    parameters:
+      dir: int
+    then:
+      - lambda: |-
+          if (millis() >= id(wake_until) && !id(menu_open)) {
+            id(wake_until) = millis() + 60000;   // the first turn only wakes the screen
+            id(oled).update();
+            return;
+          }
+          id(wake_until) = millis() + 60000;
+          if (!id(menu_open)) {
+            id(menu_open) = true;
+            if (id(ha_stage).state == "test") id(menu_index) = 2;
+          } else {
+            id(menu_index) = (id(menu_index) + dir + 3) % 3;
+          }
+          id(menu_last_ms) = millis();
+          id(oled).update();
+  - id: fire_selected
+    then:
+      - lambda: |-
+          static const char *types[] = {"start_mix", "stop_mix", "salt_ok"};
+          static const char *sent[] = {"Start sent", "Stop sent", "OK sent"};
+          int i = id(menu_index);
+          if (api::global_api_server == nullptr || !api::global_api_server->is_connected()) {
+            id(msg_text) = "No HA link";
+          } else {
+            id(salt_control).trigger(types[i]);
+            id(msg_text) = sent[i];
+          }
+          id(menu_open) = false;
+          id(msg_until) = millis() + 3000;
+          id(wake_until) = millis() + 60000;
+          id(oled).update();
   - id: update_salt_fill
     mode: restart
     then:
@@ -114,6 +313,7 @@ script:
     mode: single
     then:
       - script.stop: start_water_production
+      - switch.turn_off: port_pump
       - switch.turn_on: port_flush
       - delay: 30s
       - switch.turn_off: port_flush # Turn off flush first to reduce flow to reduce water hammer
@@ -139,6 +339,7 @@ script:
           then:  
             - switch.turn_on: port_flush
       - delay: 30s
+      - switch.turn_on: port_pump
       - switch.turn_off: port_flush
           
 
@@ -179,9 +380,52 @@ number:
 
 binary_sensor:
   - platform: gpio
+    id: knob_button
+    internal: true
+    pin:
+      number: GPIO9
+      inverted: true
+      mode:
+        input: true
+        pullup: true           # no resistor on IO9 (R400 is on IO8); without this it floats low
+      ignore_strapping_warning: true   # BOOT pin: held at power-up = bootloader
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      - lambda: |-
+          if (millis() >= id(wake_until) && !id(menu_open)) {
+            id(press_wake) = true;               // a press on a dark screen only wakes it
+            id(wake_until) = millis() + 60000;
+            id(oled).update();
+            return;
+          }
+          id(press_wake) = false;
+          id(wake_until) = millis() + 60000;
+          id(press_armed) = id(menu_open);
+          if (!id(menu_open) && id(ha_stage).state == "test") id(menu_index) = 2;
+          id(menu_open) = true;
+          id(menu_last_ms) = millis();
+          id(press_ms) = millis();
+          id(oled).update();
+    on_release:
+      - lambda: |-
+          if (id(press_wake)) {
+            id(press_wake) = false;
+            return;
+          }
+          id(wake_until) = millis() + 60000;
+          // A short click in an already-open menu closes it. A long press has
+          // already acted (and zeroed press_ms) by the time it is released.
+          if (id(press_armed) && id(press_ms) != 0 && millis() - id(press_ms) < 1500) {
+            id(menu_open) = false;
+          }
+          id(press_ms) = 0;
+          id(menu_last_ms) = millis();
+          id(oled).update();
+  - platform: gpio
     id: float_low
     name: "Float Low"
-    publish_initial_state: true
+    trigger_on_initial_state: true
     filters:
       - delayed_on_off: 5s
     pin:
@@ -193,7 +437,7 @@ binary_sensor:
   - platform: gpio
     id: float_high
     name: "Float High"
-    publish_initial_state: true
+    trigger_on_initial_state: true
     pin:
       pca9554: pca9554a_device
       number: 5
@@ -208,7 +452,7 @@ binary_sensor:
   - platform: gpio
     id: float_c
     name: "Float C"
-    publish_initial_state: true
+    trigger_on_initial_state: true
     pin:
       pca9554: pca9554a_device
       number: 6
@@ -220,6 +464,30 @@ binary_sensor:
     
 
 sensor:
+  - platform: rotary_encoder
+    id: knob
+    internal: true
+    pin_a:
+      number: GPIO4            # R410 10k pull-up on the board
+      mode:
+        input: true
+    pin_b:
+      number: GPIO10           # R409 10k pull-up on the board
+      mode:
+        input: true
+    resolution: 1
+    on_clockwise:
+      - script.execute:
+          id: menu_turn
+          dir: 1
+    on_anticlockwise:
+      - script.execute:
+          id: menu_turn
+          dir: -1
+  - platform: homeassistant
+    id: ha_mix_left
+    internal: true
+    entity_id: ${salt_minutes_entity}
   - platform: integration
     name: "Total Flow Integ"
     sensor: flow
@@ -310,6 +578,18 @@ sensor:
           }
           return scaled;
 
+text_sensor:
+  - platform: homeassistant
+    id: ha_stage            # mixing | test | refill | ready
+    internal: true
+    entity_id: ${salt_stage_entity}
+    on_value:
+      - if:
+          condition:
+            lambda: 'return x == "test";'
+          then:
+            - script.execute: wake_screen
+
 switch:
   - platform: template
     restore_mode: RESTORE_DEFAULT_OFF
@@ -322,8 +602,12 @@ switch:
         - script.stop: start_water_production
         - switch.turn_off: port_water_inlet
   - platform: gpio
-    id: port_a
+    id: port_pump
     name: "Pump"
+    on_turn_on:
+      - script.execute: wake_screen
+    on_turn_off:
+      - script.execute: wake_screen
     pin:
       pca9554: pca9554a_device
       number: 0
@@ -333,6 +617,10 @@ switch:
   - platform: gpio
     id: port_flush
     name: "Flush"
+    on_turn_on:
+      - script.execute: wake_screen
+    on_turn_off:
+      - script.execute: wake_screen
     pin:
       pca9554: pca9554a_device
       number: 1
@@ -342,6 +630,10 @@ switch:
   - platform: gpio
     id: port_water_inlet
     name: "Water Intlet"
+    on_turn_on:
+      - script.execute: wake_screen
+    on_turn_off:
+      - script.execute: wake_screen
     pin:
       pca9554: pca9554a_device
       number: 2
@@ -351,6 +643,10 @@ switch:
   - platform: gpio
     id: port_salt_fill
     name: "Salt Fill"
+    on_turn_on:
+      - script.execute: wake_screen
+    on_turn_off:
+      - script.execute: wake_screen
     pin:
       pca9554: pca9554a_device
       number: 3
