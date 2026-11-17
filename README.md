@@ -92,7 +92,7 @@ Once connected, OsmoBuddy appears in Home Assistant via the ESPHome integration 
 
 ### Screen saver
 
-OLEDs burn in, and a screen that shows the same pressures for two years does. The display therefore stays dark when idle and wakes for 60 seconds when the knob is turned or pressed, or when the pump, inlet, flush or salt-fill output switches. The first touch on a dark screen only wakes it.
+OLEDs burn in, and a screen that shows the same pressures for two years does. The display therefore stays dark when idle. It stays on while the unit runs (pump, inlet, flush or salt fill on) and for 60 seconds after, and wakes for 60 seconds when the knob is turned or pressed. The first touch on a dark screen only wakes it.
 
 ### Salt mix menu
 

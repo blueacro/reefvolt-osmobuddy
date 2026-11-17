@@ -68,7 +68,8 @@ globals:
     type: uint32_t
     initial_value: '0'
   # Screen saver: the OLED burned in after two years of the same picture, so
-  # the screen is dark unless something happened in the last 60 s.
+  # the screen is dark unless the unit is running or something happened in the
+  # last 60 s.
   - id: wake_until          # screen on until this time (60 s after boot)
     type: uint32_t
     initial_value: '60000'
@@ -113,6 +114,12 @@ interval:
     then:
       - lambda: |-
           uint32_t now = millis();
+          // No screen saver while the unit runs: keep the screen awake, and for
+          // 60 s after the last output switches off.
+          if (id(port_water_inlet).state || id(port_pump).state ||
+              id(port_flush).state || id(port_salt_fill).state) {
+            id(wake_until) = now + 60000;
+          }
           if (id(press_ms) != 0 && id(press_armed) && now - id(press_ms) >= 1500) {
             id(press_ms) = 0;
             id(fire_selected).execute();
