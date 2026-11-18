@@ -74,6 +74,15 @@ globals:
   - id: ok_wait_until
     type: uint32_t
     initial_value: '0'
+  # Salt fill time limit, a backup to the high float (Salt Fill Timeout,
+  # default 240 min). Size it from your own fills: the reference barrel
+  # (about 20 gal) fills in 2.4-2.9 h.
+  - id: fill_started
+    type: uint32_t
+    initial_value: '0'
+  - id: fill_timed_out
+    type: bool
+    initial_value: 'false'
   # Screen saver: the OLED burned in after two years of the same picture, so
   # the screen is dark unless the unit is running or something happened in the
   # last 60 s.
@@ -326,6 +335,15 @@ script:
             - binary_sensor.is_off: float_high # If the switch opens due to high water, make sure to turn off the fill valve
           then:
             - switch.turn_off: port_salt_fill
+      - lambda: |-
+          // Time limit, in case the high float sticks or comes unplugged.
+          if (id(port_salt_fill).state &&
+              millis() - id(fill_started) >= (uint32_t) (id(salt_fill_timeout).state * 60000.0f)) {
+            ESP_LOGW("salt_fill", "fill ran %.0f min without the high float; closing the valve",
+                     id(salt_fill_timeout).state);
+            id(fill_timed_out) = true;
+            id(port_salt_fill).turn_off();
+          }
   
   - id: stop_water_production
     mode: single
@@ -395,8 +413,26 @@ number:
     min_value: 0
     max_value: 50
     step: 1
+  - platform: template
+    name: "Salt Fill Timeout"
+    id: salt_fill_timeout
+    icon: mdi:timer-sand
+    entity_category: config
+    unit_of_measurement: min
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 240
+    min_value: 30
+    max_value: 480
+    step: 10
 
 binary_sensor:
+  - platform: template
+    name: "Salt Fill Timed Out"
+    id: salt_fill_timed_out
+    device_class: problem
+    lambda: 'return id(fill_timed_out);'
   - platform: gpio
     id: knob_button
     internal: true
@@ -669,6 +705,9 @@ switch:
     id: port_salt_fill
     name: "Salt Fill"
     on_turn_on:
+      - lambda: |-
+          id(fill_started) = millis();
+          id(fill_timed_out) = false;
       - script.execute: wake_screen
     on_turn_off:
       - script.execute: wake_screen

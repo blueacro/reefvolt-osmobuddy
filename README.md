@@ -35,7 +35,9 @@ The stock firmware implements automatic pressure-based water production:
 3. When tank pressure reaches the **Turn Off Pressure** setpoint, the flush valve re-opens for a **post-flush**.
 4. After ~30 s the inlet valve closes; the flush valve stays open for a few more seconds to bleed off pressure, then closes.
 
-It also supports a salt-mix auto-fill with a high-float safety cutoff, and a latching dry-contact signal out to an external controller.
+It also supports a salt-mix fill with a high-float safety cutoff, and a dry-contact signal out to an external controller.
+
+The salt fill also has a time limit, in case the high float sticks or comes unplugged. **Salt Fill Timeout** (default 240 min) closes the valve and sets the **Salt Fill Timed Out** alarm. Set it from your own fill times: the reference barrel (about 20 gal) fills in 2.4–2.9 h.
 
 > TDS measurement is **not** on this revision — it's planned for a future spin.
 
