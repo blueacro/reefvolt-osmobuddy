@@ -67,6 +67,13 @@ globals:
   - id: msg_until
     type: uint32_t
     initial_value: '0'
+  # After Salt mix OK, Home Assistant can take a few seconds to see the
+  # controller clear the hold. Until then (or 30 s), show "OK sent / waiting
+  # for Apex" instead of the TEST SALT prompt, so a second press doesn't look
+  # necessary.
+  - id: ok_wait_until
+    type: uint32_t
+    initial_value: '0'
   # Screen saver: the OLED burned in after two years of the same picture, so
   # the screen is dark unless the unit is running or something happened in the
   # last 60 s.
@@ -141,7 +148,7 @@ interval:
           tick++;
           const std::string &st = id(ha_stage).state;
           bool on = false;
-          if (st == "test") on = tick % 2;
+          if (st == "test") on = (millis() < id(ok_wait_until)) ? false : (tick % 2);
           else if (st == "refill") on = (tick % 4) == 0;
           if (on != id(status_light).current_values.is_on()) {
             auto call = on ? id(status_light).turn_on() : id(status_light).turn_off();
@@ -207,6 +214,7 @@ display:
       }
       if (now < id(msg_until)) {
         it.print(64, 32, id(refsan), TextAlign::CENTER, id(msg_text).c_str());
+        if (now < id(ok_wait_until)) it.print(64, 54, id(five), TextAlign::CENTER, "waiting for Apex");
         return;
       }
       if (id(menu_open)) {
@@ -299,6 +307,7 @@ script:
             id(port_relay).turn_on();
             if (ha) id(salt_control).trigger(types[i]);
             id(msg_text) = ha ? "OK sent" : "OK sent to Apex";
+            if (ha && id(ha_stage).state == "test") id(ok_wait_until) = millis() + 30000;
           } else if (!ha) {
             id(msg_text) = "No HA link";
           } else {
@@ -306,7 +315,7 @@ script:
             id(msg_text) = sent[i];
           }
           id(menu_open) = false;
-          id(msg_until) = millis() + 3000;
+          id(msg_until) = std::max<uint32_t>(millis() + 3000, id(ok_wait_until));
           id(wake_until) = millis() + 60000;
           id(oled).update();
   - id: update_salt_fill
@@ -593,6 +602,13 @@ text_sensor:
     internal: true
     entity_id: ${salt_stage_entity}
     on_value:
+      - lambda: |-
+          if (millis() < id(ok_wait_until) && x != "test") {
+            id(ok_wait_until) = 0;
+            id(msg_text) = (x == "ready") ? "Hold cleared" : "Not cleared";
+            id(msg_until) = millis() + 4000;
+            id(wake_until) = millis() + 60000;
+          }
       - if:
           condition:
             lambda: 'return x == "test";'

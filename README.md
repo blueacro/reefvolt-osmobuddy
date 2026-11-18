@@ -134,6 +134,8 @@ The display and the status light read two Home Assistant sensors, named by the `
 
 Both are ordinary template sensors in Home Assistant. If they don't exist the menu still sends its events and the status line stays blank.
 
+After **Salt mix OK** in the `test` stage, the screen shows "OK sent / waiting for Apex" and the status light goes dark until the stage changes, then "Hold cleared" (or "Not cleared"). If nothing changes within 30 s, the TEST SALT prompt returns. Home Assistant learns of the change only when it next reads the controller, which can take some seconds. Without this message, the prompt would keep blinking in that gap, and the first press would look as if it had failed.
+
 **Salt mix OK over the relay.** Choosing Salt mix OK also closes the on-board relay for 5 seconds, so a controller can see the confirmation without Home Assistant. In the reference install the relay is wired to an Apex switch input (named `OsmoOK`), and a latching virtual output holds the water-change pumps off until the mix is confirmed:
 
 ```
