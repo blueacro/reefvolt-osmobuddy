@@ -292,7 +292,14 @@ script:
           static const char *types[] = {"start_mix", "stop_mix", "salt_ok"};
           static const char *sent[] = {"Start sent", "Stop sent", "OK sent"};
           int i = id(menu_index);
-          if (api::global_api_server == nullptr || !api::global_api_server->is_connected()) {
+          bool ha = api::global_api_server != nullptr && api::global_api_server->is_connected();
+          if (i == 2) {
+            // Salt mix OK also goes straight to the controller over the relay,
+            // so it works without HA. The relay switches itself off after 5 s.
+            id(port_relay).turn_on();
+            if (ha) id(salt_control).trigger(types[i]);
+            id(msg_text) = ha ? "OK sent" : "OK sent to Apex";
+          } else if (!ha) {
             id(msg_text) = "No HA link";
           } else {
             id(salt_control).trigger(types[i]);
@@ -310,11 +317,6 @@ script:
             - binary_sensor.is_off: float_high # If the switch opens due to high water, make sure to turn off the fill valve
           then:
             - switch.turn_off: port_salt_fill
-      - if:
-          condition:
-            - binary_sensor.is_on: float_low # If the switch is closed, send the signal to the Apex and latch
-          then:
-            - switch.turn_on: port_relay
   
   - id: stop_water_production
     mode: single
@@ -663,7 +665,14 @@ switch:
   - platform: gpio
     id: port_relay
     name: "Relay"
-    restore_mode: RESTORE_DEFAULT_OFF
+    # Dry contact to the controller = "salt mix OK" (see README). Always a 5 s
+    # pulse (an Apex filters a switch input ~1.5 s before it reads CLOSED),
+    # never latched or restored on, or a hold that the controller keeps until
+    # the mix is confirmed would clear itself as soon as the barrel refilled.
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - delay: 5s
+      - switch.turn_off: port_relay
     pin:
       pca9554: pca9554a_device
       number: 7

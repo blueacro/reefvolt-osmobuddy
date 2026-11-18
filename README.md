@@ -134,6 +134,20 @@ The display and the status light read two Home Assistant sensors, named by the `
 
 Both are ordinary template sensors in Home Assistant. If they don't exist the menu still sends its events and the status line stays blank.
 
+**Salt mix OK over the relay.** Choosing Salt mix OK also closes the on-board relay for 5 seconds, so a controller can see the confirmation without Home Assistant. In the reference install the relay is wired to an Apex switch input (named `OsmoOK`), and a latching virtual output holds the water-change pumps off until the mix is confirmed:
+
+```
+SaltHold (virtual output, no Set line, so it latches):
+  If Output SaltOK = ON Then OFF     <- confirmation from Home Assistant
+  If OsmoOK CLOSED Then OFF          <- confirmation from OsmoBuddy's relay
+  If FloatL CLOSED Then ON           <- mixing barrel low: hold
+  If Output SaltMix = ON Then ON     <- still mixing: hold
+each water-change pump:
+  If Output SaltHold = ON Then OFF
+```
+
+The later lines win, so a confirmation is ignored while the barrel is low or a mix is running. The relay is never latched or restored on at boot: a relay stuck closed would clear the hold as soon as the barrel refilled with unmixed water.
+
 ## Manufacturing
 
 The `gerber/`, `bom/`, and `pnp/` directories contain what's needed to order assembled boards from JLCPCB, PCBWay, or similar. The enclosure in `3d/` is designed for FDM 3D printing.
